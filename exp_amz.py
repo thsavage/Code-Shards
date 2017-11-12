@@ -1,5 +1,6 @@
-import time
+import socket
 import sys
+import time
 
 import numpy as np
 import tensorflow as tf
@@ -47,7 +48,7 @@ def getAmazonData():
     # Grab Amazon and Fama-French 3 Factor data
     start, end = "1998-01-01", "2017-3-30"
     amzn_all = web.get_data_yahoo('amzn', start, end)
-    ff5f = pd.read_csv('ff5f.csv', index_col='Date')
+    ff5f = pd.read_csv('/srv/server/cdp/nabe/ff5f.csv', index_col='Date')
     ff5f.set_index(pd.to_datetime(ff5f.axes[0].astype(str)), inplace=True)
     ff3f = ff5f.rename(columns = {'Mkt-RF':'Mkt_RF'}) / 100
     amzn_all['AMZN_r'] = np.log(amzn_all['Close'] / amzn_all['Close'].shift(1)).dropna()
@@ -101,11 +102,12 @@ def evalModels(data,
                epochs=20, batch_size=100,
                nIter=9, testSplit=0.2,
                xVars=['nasdaq'], yVar='aapl',
+               rSeed=1114,
               ):
     allResults = []
 
     # Prep data
-    datatrain, datatest = train_test_split(data, test_size = testSplit, random_state=1114)
+    datatrain, datatest = train_test_split(data, test_size = testSplit, random_state=rSeed)
     rawTrainX = datatrain[xVars].as_matrix()
     rawTrainY = datatrain[yVar].as_matrix()
     rawTestX = datatest[xVars].as_matrix()
@@ -124,8 +126,9 @@ def evalModels(data,
         print('- the MSE is %f' % mse)
 
         sumMSE += mse
+    sumTime = (time.time()-startTime)
     print ('The average MSE is %f' % (sumMSE/nIter))
-    print ('The average running time is: %0.2f seconds\n' % ((time.time()-startTime)/nIter))
+    print ('The average running time is: %0.2f seconds\n' % (sumTime/nIter))
     allResults.append((sumMSE, sumTime))
     
     # Run model
@@ -150,8 +153,9 @@ def evalModels(data,
             mse = ((datatest[yVar] - datatest[colName])**2).mean()
             print('- the MSE is %f' % mse)
             sumMSE += mse
+        sumTime = (time.time()-startTime)
         print ('The average MSE is %f' % (sumMSE/nIter))
-        print ('The average running time is: %0.2f seconds\n' % ((time.time()-startTime)/nIter))
+        print ('The average running time is: %0.2f seconds\n' % (sumTime/nIter))
         allResults.append((sumMSE, sumTime))
 
     return allResults
@@ -163,6 +167,7 @@ if __name__=='__main__':
     #dataApple = getAppleData()
     dataAmazon = getAmazonData()
     nIter = int(sys.argv[1])
+    hostId = int(socket.gethostbyname(socket.gethostname()).split('.')[-1])
     with tf.device('/cpu:0'):
         results = evalModels(dataAmazon, nIter=nIter,
                              models=((MLPModel, {'layers': [500,1000,1000,1000,500]}),
@@ -170,7 +175,9 @@ if __name__=='__main__':
                                      (LSTMModel, {'blocks': 10, 'look_back': 90}),
                                      ),
                              epochs=10, batch_size=512,
-                             xVars= ['RF', 'Mkt_RF', 'SMB', 'HML'], yVar='AMZN_r')
+                             xVars= ['RF', 'Mkt_RF', 'SMB', 'HML'], yVar='AMZN_r',
+                             rSeed = 1000 + hostId,
+                             )
     mse, time = map(np.array, zip(*results))
     stats = np.concatenate((mse, time, mse/nIter, time/nIter), axis=0)
     print ','.join(map(str, stats))
